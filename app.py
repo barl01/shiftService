@@ -4,15 +4,13 @@ import sqlite3
 from datetime import datetime, date, timedelta
 import os
 
-# --- הגדרות תצוגה ועיצוב ---
-st.set_page_config(layout="wide", page_title="מערכת טבלת צדק יחידתית", page_icon="⚖️")
+# --- Configuration & UI Styles ---
+st.set_page_config(layout="wide", page_title="Unit Justice System", page_icon="⚖️")
 
-# הזרקת CSS משודרג - דגש על תיבות בחירה, טבלאות והתראות
-st.markdown("""
+GLOBAL_STYLES = """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap');
 
-    /* רקע כללי וגופן */
     .stApp {
         background-color: #f1f4f1; 
         font-family: 'Assistant', sans-serif;
@@ -20,7 +18,6 @@ st.markdown("""
         text-align: right;
     }
 
-    /* עיצוב סרגל הצד */
     [data-testid="stSidebar"] {
         background-color: #2d3e2d !important;
         direction: rtl;
@@ -29,7 +26,6 @@ st.markdown("""
         color: white !important;
     }
 
-    /* עיצוב ה"פופים" - תיבות בחירה, קלט ותאריכים */
     .stTextInput input, .stSelectbox div[data-baseweb="select"], .stTextArea textarea, .stDateInput input {
         background-color: #ffffff !important;
         border: 1px solid #c8e6c9 !important;
@@ -39,11 +35,9 @@ st.markdown("""
         transition: all 0.3s ease;
     }
 
-    /* עיצוב רשימת הבחירה שנפתחת */
     div[data-baseweb="popover"] { border-radius: 12px !important; }
     div[data-baseweb="menu"] { background-color: #ffffff !important; border-radius: 12px !important; }
 
-    /* עיצוב טבלאות */
     .stTable, [data-testid="stTable"] {
         background-color: white !important;
         border-radius: 15px !important;
@@ -59,7 +53,6 @@ st.markdown("""
         border-bottom: 2px solid #e8f5e9 !important;
     }
 
-    /* עיצוב כפתורים */
     div.stButton > button {
         width: 100%;
         border-radius: 12px;
@@ -76,7 +69,6 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* עיצוב התראות */
     .stAlert {
         border-radius: 15px !important;
         border: none !important;
@@ -87,64 +79,78 @@ st.markdown("""
     h1, h2, h3 { color: #1b5e20; text-align: right; margin-bottom: 15px; }
     .stDataFrame { border: none !important; }
     </style>
-    """, unsafe_allow_html=True)
+"""
 
 
-# --- פונקציות בסיס נתונים ---
-def init_db():
-    conn = sqlite3.connect('justice_table.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
+# --- Database Core ---
+def connect_db():
+    return sqlite3.connect('justice_table.db', check_same_thread=False)
+
+
+def setup_database():
+    db = connect_db()
+    cursor = db.cursor()
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, personal_id TEXT, name TEXT, 
                   password TEXT, role TEXT, section TEXT, kadar_points INTEGER DEFAULT 0, is_active BOOLEAN)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS exemptions 
-                 (user_id INTEGER, type TEXT, details TEXT, end_date DATE, status TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS rotations 
-                 (start_date DATE, end_date DATE, user_id INTEGER, task_name TEXT, total_days INTEGER, location TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS task_types (name TEXT UNIQUE)''')
 
-    c.execute("SELECT COUNT(*) FROM users")
-    if c.fetchone()[0] == 0:
-        c.execute(
+    cursor.execute('''CREATE TABLE IF NOT EXISTS exemptions 
+                 (user_id INTEGER, type TEXT, details TEXT, end_date DATE, status TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS rotations 
+                 (start_date DATE, end_date DATE, user_id INTEGER, task_name TEXT, total_days INTEGER, location TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS task_types (name TEXT UNIQUE)''')
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
             "INSERT INTO users (personal_id, name, password, role, section, kadar_points, is_active) VALUES (?,?,?,?,?,?,?)",
             ("100", "מפקד", "1234", "admin", "מפקדה", 0, 1))
-        c.execute(
-            "INSERT INTO users (personal_id, name, password, role, section, kadar_points, is_active) VALUES (?,?,?,?,?,?,?)",
-            ("200", "לינור ז", "1234", "user", "מחשוב", 0, 1))
-        c.execute(
-            "INSERT INTO users (personal_id, name, password, role, section, kadar_points, is_active) VALUES (?,?,?,?,?,?,?)",
-            ("300", "בר", "1234", "user", "סיסטם", 0, 1))
-        c.executemany("INSERT OR IGNORE INTO task_types VALUES (?)", [("מטבח",), ("שמירה",), ("סיור",), ("אבטש",)])
-    conn.commit()
-    return conn
+
+        tasks = [("מטבח",), ("שמירה",), ("סיור",), ("אבטש",)]
+        cursor.executemany("INSERT OR IGNORE INTO task_types VALUES (?)", tasks)
+
+    db.commit()
+    return db
 
 
-conn = init_db()
+# --- App Logic Functions ---
+def verify_credentials(user, pwd, db):
+    return db.execute("SELECT id, name, role FROM users WHERE name = ? AND password = ?", (user, pwd)).fetchone()
 
-if 'logged_in' not in st.session_state:
-    st.session_state.update({'logged_in': False, 'user_role': None, 'user_id': None, 'user_name': ""})
 
-# --- דף כניסה ---
-if not st.session_state['logged_in']:
-    col1, col2, col3 = st.columns([1, 1.5, 1])
-    with col2:
+def run_login_screen(db):
+    _, container, _ = st.columns([1, 1.5, 1])
+    with container:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.title("⚖️ כניסה למערכת")
-        with st.container():
-            u_name = st.text_input("👤 שם משתמש")
-            u_pass = st.text_input("🔑 סיסמה", type="password")
-            if st.button("התחבר למערכת"):
-                res = conn.execute("SELECT id, name, role FROM users WHERE name = ? AND password = ?",
-                                   (u_name, u_pass)).fetchone()
-                if res:
-                    st.session_state.update(
-                        {'logged_in': True, 'user_id': res[0], 'user_name': res[1], 'user_role': res[2]})
-                    st.rerun()
-                else:
-                    st.error("❌ פרטים שגויים, נסה שוב")
+        user_input = st.text_input("👤 שם משתמש")
+        pass_input = st.text_input("🔑 סיסמה", type="password")
 
-# --- ממשק לאחר התחברות ---
-else:
+        if st.button("התחבר למערכת"):
+            record = verify_credentials(user_input, pass_input, db)
+            if record:
+                st.session_state.update(
+                    {'logged_in': True, 'user_id': record[0], 'user_name': record[1], 'user_role': record[2]})
+                st.rerun()
+            else:
+                st.error("❌ פרטים שגויים, נסה שוב")
+
+
+def main_app():
+    st.markdown(GLOBAL_STYLES, unsafe_allow_html=True)
+    db_conn = setup_database()
+
+    if 'logged_in' not in st.session_state:
+        st.session_state.update({'logged_in': False, 'user_role': None, 'user_id': None, 'user_name': ""})
+
+    if not st.session_state['logged_in']:
+        run_login_screen(db_conn)
+        return
+
+    # Sidebar Navigation
     if os.path.exists("logo.png"):
         st.sidebar.image("logo.png", use_container_width=True)
     else:
@@ -152,188 +158,186 @@ else:
 
     st.sidebar.title(f"שלום, {st.session_state['user_name']} 👋")
 
-    admin_menu = ["📅 ניהול שיבוצים", "🔍 היסטוריית תורנויות", "👥 ניהול חיילים", "🛡️ אישור וצפייה בפטורים",
-                  "⚙️ הגדרות תורנויות", "🔐 שינוי סיסמה"]
-    user_menu = ["📌 התורנויות שלי", "📝 בקשת פטור", "🔐 שינוי סיסמה"]
-    menu = st.sidebar.radio("תפריט ניווט", admin_menu if st.session_state['user_role'] == "admin" else user_menu)
+    admin_nav = ["📅 ניהול שיבוצים", "🔍 היסטוריית תורנויות", "👥 ניהול חיילים", "🛡️ אישור וצפייה בפטורים",
+                 "⚙️ הגדרות תורנויות", "🔐 שינוי סיסמה"]
+    user_nav = ["📌 התורנויות שלי", "📝 בקשת פטור", "🔐 שינוי סיסמה"]
+
+    view_mode = st.sidebar.radio("תפריט ניווט", admin_nav if st.session_state['user_role'] == "admin" else user_nav)
 
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 התנתק"):
         st.session_state.update({'logged_in': False})
         st.rerun()
 
-    # --- שינוי סיסמה ---
-    if "שינוי סיסמה" in menu:
+    # Routing Logic
+    if "שינוי סיסמה" in view_mode:
         st.header("🔐 שינוי סיסמת כניסה")
-        with st.form("change_pass_form"):
-            old_p = st.text_input("סיסמה נוכחית", type="password")
+        with st.form("reset_pwd"):
+            cur_p = st.text_input("סיסמה נוכחית", type="password")
             new_p = st.text_input("סיסמה חדשה", type="password")
-            confirm_p = st.text_input("אימות סיסמה חדשה", type="password")
+            ver_p = st.text_input("אימות סיסמה חדשה", type="password")
             if st.form_submit_button("עדכן סיסמה"):
-                current_data = conn.execute("SELECT password FROM users WHERE id = ?",
-                                            (st.session_state['user_id'],)).fetchone()
-                if old_p != current_data[0]:
+                actual = \
+                db_conn.execute("SELECT password FROM users WHERE id = ?", (st.session_state['user_id'],)).fetchone()[0]
+                if cur_p != actual:
                     st.error("❌ הסיסמה נוכחית אינה נכונה")
-                elif new_p != confirm_p:
+                elif new_p != ver_p:
                     st.error("❌ הסיסמאות החדשות אינן תואמות")
                 elif len(new_p) < 4:
                     st.error("❌ הסיסמה החדשה קצרה מדי")
                 else:
-                    conn.execute("UPDATE users SET password = ? WHERE id = ?", (new_p, st.session_state['user_id']))
-                    conn.commit()
+                    db_conn.execute("UPDATE users SET password = ? WHERE id = ?", (new_p, st.session_state['user_id']))
+                    db_conn.commit()
                     st.success("✅ הסיסמה עודכנה!")
 
-    # --- מנהל: ניהול שיבוצים ---
-    elif "ניהול שיבוצים" in menu:
+    elif "ניהול שיבוצים" in view_mode:
         st.header("📅 ניהול ושיבוץ תורנויות")
-        col1, col2 = st.columns([1, 1.2])
-        with col1:
+        left, right = st.columns([1, 1.2])
+        with left:
             st.subheader("🛠️ יצירת שיבוץ חדש")
-            d_range = st.date_input("טווח תאריכים", [date.today(), date.today() + timedelta(days=1)])
-            loc_input = st.text_input("📍 מיקום")
-            all_users_df = pd.read_sql_query(
-                "SELECT id, name, kadar_points FROM users WHERE role = 'user' AND is_active = 1", conn)
-            if not all_users_df.empty:
-                sorted_users = all_users_df.sort_values(by='kadar_points')
-                recommended = sorted_users.iloc[0]
-                st.info(f"✨ מומלץ: **{recommended['name']}** ({recommended['kadar_points']} נק')")
-                user_options = [f"{r['name']} ({r['kadar_points']} נק')" for _, r in sorted_users.iterrows()]
-                choice = st.selectbox("בחר חייל מהרשימה:", user_options)
-                sel_name = choice.split(" (")[0]
-                sel_id = int(all_users_df[all_users_df['name'] == sel_name].iloc[0]['id'])
+            range_dates = st.date_input("טווח תאריכים", [date.today(), date.today() + timedelta(days=1)])
+            site = st.text_input("📍 מיקום")
 
-                today_str = date.today().isoformat()
-                user_ex = pd.read_sql_query(
-                    f"SELECT type as 'סוג', details as 'פירוט', end_date as 'תאריך סיום' FROM exemptions WHERE user_id = {sel_id} AND status = 'מאושר' AND end_date >= '{today_str}'",
-                    conn)
-                if not user_ex.empty:
-                    st.warning(f"⚠️ פטורים פעילים ל{sel_name}:")
-                    st.table(user_ex)
+            # Use original kadar_points column name
+            members = pd.read_sql_query(
+                "SELECT id, name, kadar_points FROM users WHERE role = 'user' AND is_active = 1", db_conn)
+            if not members.empty:
+                members_sorted = members.sort_values(by='kadar_points')
+                top_candidate = members_sorted.iloc[0]
+                st.info(f"✨ מומלץ: **{top_candidate['name']}** ({top_candidate['kadar_points']} נק')")
+
+                options = [f"{r['name']} ({r['kadar_points']} נק')" for _, r in members_sorted.iterrows()]
+                selected = st.selectbox("בחר חייל מהרשימה:", options)
+
+                target_name = selected.split(" (")[0]
+                target_uid = int(members[members['name'] == target_name].iloc[0]['id'])
+
+                active_ex = pd.read_sql_query(
+                    f"SELECT type as 'סוג', details as 'פירוט', end_date as 'תאריך סיום' FROM exemptions WHERE user_id = {target_uid} AND status = 'מאושר' AND end_date >= '{date.today().isoformat()}'",
+                    db_conn)
+                if not active_ex.empty:
+                    st.warning(f"⚠️ פטורים פעילים ל{target_name}:")
+                    st.table(active_ex)
                 else:
-                    st.success(f"✅ ל{sel_name} אין פטורים פעילים.")
+                    st.success(f"✅ ל{target_name} אין פטורים פעילים.")
 
-                if len(d_range) == 2:
-                    start_d, end_d = d_range
-                    tasks = [t[0] for t in conn.execute("SELECT name FROM task_types").fetchall()]
-                    task = st.selectbox("סוג משימה", tasks if tasks else ["כללי"])
+                if len(range_dates) == 2:
+                    s_date, e_date = range_dates
+                    tasks = [t[0] for t in db_conn.execute("SELECT name FROM task_types").fetchall()]
+                    chosen_task = st.selectbox("סוג משימה", tasks if tasks else ["כללי"])
                     if st.button("🚀 אשר שיבוץ"):
-                        num_days = (end_d - start_d).days + 1
-                        conn.execute("INSERT INTO rotations VALUES (?, ?, ?, ?, ?, ?)",
-                                     (start_d, end_d, sel_id, task, num_days, loc_input))
-                        conn.execute("UPDATE users SET kadar_points = kadar_points + ? WHERE id = ?",
-                                     (num_days * 5, sel_id))
-                        conn.commit()
+                        days_count = (e_date - s_date).days + 1
+                        db_conn.execute("INSERT INTO rotations VALUES (?, ?, ?, ?, ?, ?)",
+                                        (s_date, e_date, target_uid, chosen_task, days_count, site))
+                        db_conn.execute("UPDATE users SET kadar_points = kadar_points + ? WHERE id = ?",
+                                        (days_count * 5, target_uid))
+                        db_conn.commit()
                         st.success("✅ השיבוץ בוצע בהצלחה!")
                         st.rerun()
-        with col2:
+        with right:
             st.subheader("📋 לו\"ז תורנויות עתידי")
-            active_rots = pd.read_sql_query(
-                f"SELECT r.start_date as 'התחלה', r.end_date as 'סיום', u.name as 'חייל', r.task_name as 'משימה', r.location as 'מיקום' FROM rotations r JOIN users u ON r.user_id = u.id WHERE r.end_date >= '{date.today().isoformat()}' ORDER BY r.start_date ASC",
-                conn)
-            st.dataframe(active_rots, use_container_width=True)
+            future_q = f"SELECT r.start_date as 'התחלה', r.end_date as 'סיום', u.name as 'חייל', r.task_name as 'משימה', r.location as 'מיקום' FROM rotations r JOIN users u ON r.user_id = u.id WHERE r.end_date >= '{date.today().isoformat()}' ORDER BY r.start_date ASC"
+            st.dataframe(pd.read_sql_query(future_q, db_conn), use_container_width=True)
 
-    # --- מנהל: היסטוריית תורנויות (מפקד) ---
-    elif "היסטוריית תורנויות" in menu:
+    elif "היסטוריית תורנויות" in view_mode:
         st.header("🔍 היסטוריית תורנויות מלאה")
-        all_u = pd.read_sql_query("SELECT id, name FROM users WHERE role = 'user'", conn)
+        all_u = pd.read_sql_query("SELECT id, name FROM users WHERE role = 'user'", db_conn)
         if not all_u.empty:
-            target_user = st.selectbox("בחר חייל לצפייה בכל ההיסטוריה שלו:", all_u['name'].tolist())
-            t_id = all_u[all_u['name'] == target_user].iloc[0]['id']
-            hist_df = pd.read_sql_query(
-                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום', total_days as 'ימים' FROM rotations WHERE user_id = {t_id} ORDER BY start_date DESC",
-                conn)
-            if not hist_df.empty:
-                st.table(hist_df)
+            pick = st.selectbox("בחר חייל לצפייה בכל ההיסטוריה שלו:", all_u['name'].tolist())
+            picked_id = all_u[all_u['name'] == pick].iloc[0]['id']
+            logs = pd.read_sql_query(
+                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום', total_days as 'ימים' FROM rotations WHERE user_id = {picked_id} ORDER BY start_date DESC",
+                db_conn)
+            if not logs.empty:
+                st.table(logs)
             else:
-                st.info(f"לא נמצאה היסטוריה עבור {target_user}")
+                st.info(f"לא נמצאה היסטוריה עבור {pick}")
 
-    # --- מנהל: ניהול חיילים ---
-    elif "ניהול חיילים" in menu:
+    elif "ניהול חיילים" in view_mode:
         st.header("👥 ניהול סגל וחיילים")
-        df_u = pd.read_sql_query(
+        summary = pd.read_sql_query(
             "SELECT personal_id as 'מזהה', name as 'שם', section as 'מדור', kadar_points as 'נקודות' FROM users WHERE role='user'",
-            conn)
-        st.dataframe(df_u, use_container_width=True)
+            db_conn)
+        st.dataframe(summary, use_container_width=True)
         with st.expander("➕ הוספת חייל חדש"):
-            with st.form("add_user"):
-                p_id = st.text_input("🔢 מספר אישי")
-                p_name = st.text_input("📝 שם מלא")
-                p_sec = st.text_input("🏢 מדור")
+            with st.form("create_user"):
+                new_pid = st.text_input("🔢 מספר אישי")
+                new_name = st.text_input("📝 שם מלא")
+                new_sec = st.text_input("🏢 מדור")
                 if st.form_submit_button("שמור במערכת"):
-                    conn.execute(
+                    db_conn.execute(
                         "INSERT INTO users (personal_id, name, password, role, section, kadar_points, is_active) VALUES (?, ?, '1234', 'user', ?, 0, 1)",
-                        (p_id, p_name, p_sec))
-                    conn.commit()
+                        (new_pid, new_name, new_sec))
+                    db_conn.commit()
                     st.rerun()
 
-    # --- מנהל: אישור וצפייה בפטורים ---
-    elif "פטורים" in menu:
+    elif "פטורים" in view_mode:
         st.header("🛡️ ניהול פטורים יחידתי")
-        tab1, tab2 = st.tabs(["⏳ בקשות ממתינות", "✅ פטורים מאושרים"])
-        with tab1:
-            pend = pd.read_sql_query(
+        t_pend, t_act = st.tabs(["⏳ בקשות ממתינות", "✅ פטורים מאושרים"])
+        with t_pend:
+            pending_df = pd.read_sql_query(
                 "SELECT e.rowid as 'ID', u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'ממתין'",
-                conn)
-            if not pend.empty:
-                st.table(pend)
-                req_id = st.number_input("הכנס ID לאישור", step=1, min_value=1)
+                db_conn)
+            if not pending_df.empty:
+                st.table(pending_df)
+                app_id = st.number_input("הכנס ID לאישור", step=1, min_value=1)
                 if st.button("✅ אשר פטור"):
-                    conn.execute("UPDATE exemptions SET status = 'מאושר' WHERE rowid = ?", (req_id,))
-                    conn.commit()
+                    db_conn.execute("UPDATE exemptions SET status = 'מאושר' WHERE rowid = ?", (app_id,))
+                    db_conn.commit()
                     st.rerun()
             else:
-                st.info("אין בקשות ממתינות כרגע.")
-        with tab2:
-            active_ex = pd.read_sql_query(
-                f"SELECT u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'מאושר' AND e.end_date >= '{date.today().isoformat()}'",
-                conn)
-            st.table(active_ex)
+                st.info("אין בקשות ממתינות.")
+        with t_act:
+            approved_q = f"SELECT u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'מאושר' AND e.end_date >= '{date.today().isoformat()}'"
+            st.table(pd.read_sql_query(approved_q, db_conn))
 
-    # --- חייל: התורנויות שלי + היסטוריה ---
-    elif "התורנויות שלי" in menu:
+    elif "התורנויות שלי" in view_mode:
         st.header(f"📌 התורנויות שלי - {st.session_state['user_name']}")
-        pts = conn.execute("SELECT kadar_points FROM users WHERE id = ?", (st.session_state['user_id'],)).fetchone()[0]
-        st.metric("מאזן נקודות צדק", pts)
+        score = \
+        db_conn.execute("SELECT kadar_points FROM users WHERE id = ?", (st.session_state['user_id'],)).fetchone()[0]
+        st.metric("מאזן נקודות צדק", score)
 
         st.subheader("📅 תורנויות קרובות")
-        today_str = date.today().isoformat()
-        my_future_df = pd.read_sql_query(
-            f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date >= '{today_str}' ORDER BY start_date ASC",
-            conn)
-        if not my_future_df.empty:
-            st.table(my_future_df)
+        today_val = date.today().isoformat()
+        personal_future = pd.read_sql_query(
+            f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date >= '{today_val}' ORDER BY start_date ASC",
+            db_conn)
+        if not personal_future.empty:
+            st.table(personal_future)
         else:
-            st.info("אין לך תורנויות משובצות לעתיד הקרוב.")
+            st.info("אין שיבוצים עתידיים.")
 
-        with st.expander("🕒 לצפייה בהיסטוריית תורנויות שביצעתי"):
-            my_past_df = pd.read_sql_query(
-                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date < '{today_str}' ORDER BY start_date DESC",
-                conn)
-            if not my_past_df.empty:
-                st.table(my_past_df)
+        with st.expander("🕒 היסטוריית תורנויות אישית"):
+            personal_past = pd.read_sql_query(
+                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date < '{today_val}' ORDER BY start_date DESC",
+                db_conn)
+            if not personal_past.empty:
+                st.table(personal_past)
             else:
-                st.write("עדיין לא ביצעת תורנויות דרך המערכת.")
+                st.write("אין היסטוריה קודמת.")
 
-    # --- חייל: בקשת פטור ---
-    elif "בקשת פטור" in menu:
+    elif "בקשת פטור" in view_mode:
         st.header("📝 הגשת בקשה לפטור")
-        with st.form("ex_req"):
-            e_t = st.selectbox("סוג הפטור", ["רפואי", "אישי", "אחר"])
-            e_d = st.text_area("פירוט וסיבה")
-            e_v = st.date_input("תאריך סיום פטור")
+        with st.form("req_ex"):
+            type_ex = st.selectbox("סוג הפטור", ["רפואי", "אישי", "אחר"])
+            desc_ex = st.text_area("פירוט וסיבה")
+            end_ex = st.date_input("תאריך סיום פטור")
             if st.form_submit_button("שלח למפקד"):
-                conn.execute(
+                db_conn.execute(
                     "INSERT INTO exemptions (user_id, type, details, end_date, status) VALUES (?, ?, ?, ?, 'ממתין')",
-                    (st.session_state['user_id'], e_t, e_d, e_v))
-                conn.commit()
-                st.success("✅ הבקשה נשלחה לאישור המפקד.")
+                    (st.session_state['user_id'], type_ex, desc_ex, end_ex))
+                db_conn.commit()
+                st.success("✅ הבקשה נשלחה.")
 
-    # --- הגדרות ---
-    elif "הגדרות" in menu:
+    elif "הגדרות" in view_mode:
         st.header("⚙️ הגדרות מערכת")
-        nt = st.text_input("הוסף סוג תורנות חדש")
+        input_task = st.text_input("הוסף סוג תורנות חדש")
         if st.button("הוסף"):
-            conn.execute("INSERT OR IGNORE INTO task_types VALUES (?)", (nt,))
-            conn.commit()
+            db_conn.execute("INSERT OR IGNORE INTO task_types VALUES (?)", (input_task,))
+            db_conn.commit()
             st.rerun()
-        st.table(pd.read_sql_query("SELECT name as 'סוגי תורנויות' FROM task_types", conn))
+        st.table(pd.read_sql_query("SELECT name as 'סוגי תורנויות' FROM task_types", db_conn))
+
+
+if __name__ == "__main__":
+    main_app()
