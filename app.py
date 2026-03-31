@@ -151,7 +151,9 @@ else:
         st.sidebar.markdown("<h1 style='text-align:center; color:white;'>⚖️</h1>", unsafe_allow_html=True)
 
     st.sidebar.title(f"שלום, {st.session_state['user_name']} 👋")
-    admin_menu = ["📅 ניהול שיבוצים", "👥 ניהול חיילים", "🛡️ אישור וצפייה בפטורים", "⚙️ הגדרות תורנויות", "🔐 שינוי סיסמה"]
+
+    admin_menu = ["📅 ניהול שיבוצים", "🔍 היסטוריית תורנויות", "👥 ניהול חיילים", "🛡️ אישור וצפייה בפטורים",
+                  "⚙️ הגדרות תורנויות", "🔐 שינוי סיסמה"]
     user_menu = ["📌 התורנויות שלי", "📝 בקשת פטור", "🔐 שינוי סיסמה"]
     menu = st.sidebar.radio("תפריט ניווט", admin_menu if st.session_state['user_role'] == "admin" else user_menu)
 
@@ -171,7 +173,7 @@ else:
                 current_data = conn.execute("SELECT password FROM users WHERE id = ?",
                                             (st.session_state['user_id'],)).fetchone()
                 if old_p != current_data[0]:
-                    st.error("❌ הסיסמה הנוכחית אינה נכונה")
+                    st.error("❌ הסיסמה נוכחית אינה נכונה")
                 elif new_p != confirm_p:
                     st.error("❌ הסיסמאות החדשות אינן תואמות")
                 elif len(new_p) < 4:
@@ -225,11 +227,25 @@ else:
                         st.rerun()
         with col2:
             st.subheader("📋 לו\"ז תורנויות עתידי")
-            # כאן הוספתי את r.location לשאילתה
             active_rots = pd.read_sql_query(
                 f"SELECT r.start_date as 'התחלה', r.end_date as 'סיום', u.name as 'חייל', r.task_name as 'משימה', r.location as 'מיקום' FROM rotations r JOIN users u ON r.user_id = u.id WHERE r.end_date >= '{date.today().isoformat()}' ORDER BY r.start_date ASC",
                 conn)
             st.dataframe(active_rots, use_container_width=True)
+
+    # --- מנהל: היסטוריית תורנויות (מפקד) ---
+    elif "היסטוריית תורנויות" in menu:
+        st.header("🔍 היסטוריית תורנויות מלאה")
+        all_u = pd.read_sql_query("SELECT id, name FROM users WHERE role = 'user'", conn)
+        if not all_u.empty:
+            target_user = st.selectbox("בחר חייל לצפייה בכל ההיסטוריה שלו:", all_u['name'].tolist())
+            t_id = all_u[all_u['name'] == target_user].iloc[0]['id']
+            hist_df = pd.read_sql_query(
+                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום', total_days as 'ימים' FROM rotations WHERE user_id = {t_id} ORDER BY start_date DESC",
+                conn)
+            if not hist_df.empty:
+                st.table(hist_df)
+            else:
+                st.info(f"לא נמצאה היסטוריה עבור {target_user}")
 
     # --- מנהל: ניהול חיילים ---
     elif "ניהול חיילים" in menu:
@@ -255,7 +271,6 @@ else:
         st.header("🛡️ ניהול פטורים יחידתי")
         tab1, tab2 = st.tabs(["⏳ בקשות ממתינות", "✅ פטורים מאושרים"])
         with tab1:
-            # הוספת e.details (פירוט) לשאילתה
             pend = pd.read_sql_query(
                 "SELECT e.rowid as 'ID', u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'ממתין'",
                 conn)
@@ -269,21 +284,35 @@ else:
             else:
                 st.info("אין בקשות ממתינות כרגע.")
         with tab2:
-            # הוספת e.details (פירוט) לשאילתה
             active_ex = pd.read_sql_query(
                 f"SELECT u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'מאושר' AND e.end_date >= '{date.today().isoformat()}'",
                 conn)
             st.table(active_ex)
 
-    # --- חייל: התורנויות שלי ---
+    # --- חייל: התורנויות שלי + היסטוריה ---
     elif "התורנויות שלי" in menu:
         st.header(f"📌 התורנויות שלי - {st.session_state['user_name']}")
         pts = conn.execute("SELECT kadar_points FROM users WHERE id = ?", (st.session_state['user_id'],)).fetchone()[0]
         st.metric("מאזן נקודות צדק", pts)
-        my_df = pd.read_sql_query(
-            f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date >= '{date.today().isoformat()}'",
+
+        st.subheader("📅 תורנויות קרובות")
+        today_str = date.today().isoformat()
+        my_future_df = pd.read_sql_query(
+            f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date >= '{today_str}' ORDER BY start_date ASC",
             conn)
-        st.table(my_df)
+        if not my_future_df.empty:
+            st.table(my_future_df)
+        else:
+            st.info("אין לך תורנויות משובצות לעתיד הקרוב.")
+
+        with st.expander("🕒 לצפייה בהיסטוריית תורנויות שביצעתי"):
+            my_past_df = pd.read_sql_query(
+                f"SELECT start_date as 'התחלה', end_date as 'סיום', task_name as 'משימה', location as 'מיקום' FROM rotations WHERE user_id = {st.session_state['user_id']} AND end_date < '{today_str}' ORDER BY start_date DESC",
+                conn)
+            if not my_past_df.empty:
+                st.table(my_past_df)
+            else:
+                st.write("עדיין לא ביצעת תורנויות דרך המערכת.")
 
     # --- חייל: בקשת פטור ---
     elif "בקשת פטור" in menu:
