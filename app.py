@@ -39,16 +39,11 @@ st.markdown("""
         transition: all 0.3s ease;
     }
 
-    /* עיצוב רשימת הבחירה שנפתחת (התפריט עצמו) */
-    div[data-baseweb="popover"] {
-        border-radius: 12px !important;
-    }
-    div[data-baseweb="menu"] {
-        background-color: #ffffff !important;
-        border-radius: 12px !important;
-    }
+    /* עיצוב רשימת הבחירה שנפתחת */
+    div[data-baseweb="popover"] { border-radius: 12px !important; }
+    div[data-baseweb="menu"] { background-color: #ffffff !important; border-radius: 12px !important; }
 
-    /* עיצוב טבלאות (כולל טבלת פטורים) */
+    /* עיצוב טבלאות */
     .stTable, [data-testid="stTable"] {
         background-color: white !important;
         border-radius: 15px !important;
@@ -57,7 +52,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0,0,0,0.03) !important;
     }
 
-    /* עיצוב כותרות הטבלה */
     thead tr th {
         background-color: #f9fbf9 !important;
         color: #2e7d32 !important;
@@ -82,7 +76,7 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* עיצוב התראות (Warning/Info/Success) */
+    /* עיצוב התראות */
     .stAlert {
         border-radius: 15px !important;
         border: none !important;
@@ -90,12 +84,8 @@ st.markdown("""
         box-shadow: 0 2px 8px rgba(0,0,0,0.05) !important;
     }
 
-    /* כותרות */
     h1, h2, h3 { color: #1b5e20; text-align: right; margin-bottom: 15px; }
-
-    /* הורדת הקו האפור מתחת לטבלאות דאטה-פריים */
     .stDataFrame { border: none !important; }
-
     </style>
     """, unsafe_allow_html=True)
 
@@ -131,7 +121,6 @@ def init_db():
 
 conn = init_db()
 
-# --- ניהול Session ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'user_role': None, 'user_id': None, 'user_name': ""})
 
@@ -162,10 +151,8 @@ else:
         st.sidebar.markdown("<h1 style='text-align:center; color:white;'>⚖️</h1>", unsafe_allow_html=True)
 
     st.sidebar.title(f"שלום, {st.session_state['user_name']} 👋")
-
     admin_menu = ["📅 ניהול שיבוצים", "👥 ניהול חיילים", "🛡️ אישור וצפייה בפטורים", "⚙️ הגדרות תורנויות", "🔐 שינוי סיסמה"]
     user_menu = ["📌 התורנויות שלי", "📝 בקשת פטור", "🔐 שינוי סיסמה"]
-
     menu = st.sidebar.radio("תפריט ניווט", admin_menu if st.session_state['user_role'] == "admin" else user_menu)
 
     st.sidebar.markdown("---")
@@ -238,8 +225,9 @@ else:
                         st.rerun()
         with col2:
             st.subheader("📋 לו\"ז תורנויות עתידי")
+            # כאן הוספתי את r.location לשאילתה
             active_rots = pd.read_sql_query(
-                f"SELECT r.start_date as 'התחלה', r.end_date as 'סיום', u.name as 'חייל', r.task_name as 'משימה' FROM rotations r JOIN users u ON r.user_id = u.id WHERE r.end_date >= '{date.today().isoformat()}' ORDER BY r.start_date ASC",
+                f"SELECT r.start_date as 'התחלה', r.end_date as 'סיום', u.name as 'חייל', r.task_name as 'משימה', r.location as 'מיקום' FROM rotations r JOIN users u ON r.user_id = u.id WHERE r.end_date >= '{date.today().isoformat()}' ORDER BY r.start_date ASC",
                 conn)
             st.dataframe(active_rots, use_container_width=True)
 
@@ -262,13 +250,14 @@ else:
                     conn.commit()
                     st.rerun()
 
-    # --- מנהל: אישור פטורים ---
+    # --- מנהל: אישור וצפייה בפטורים ---
     elif "פטורים" in menu:
         st.header("🛡️ ניהול פטורים יחידתי")
         tab1, tab2 = st.tabs(["⏳ בקשות ממתינות", "✅ פטורים מאושרים"])
         with tab1:
+            # הוספת e.details (פירוט) לשאילתה
             pend = pd.read_sql_query(
-                "SELECT e.rowid as 'ID', u.name as 'חייל', e.type as 'סוג', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'ממתין'",
+                "SELECT e.rowid as 'ID', u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'ממתין'",
                 conn)
             if not pend.empty:
                 st.table(pend)
@@ -280,8 +269,9 @@ else:
             else:
                 st.info("אין בקשות ממתינות כרגע.")
         with tab2:
+            # הוספת e.details (פירוט) לשאילתה
             active_ex = pd.read_sql_query(
-                f"SELECT u.name as 'חייל', e.type as 'סוג', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'מאושר' AND e.end_date >= '{date.today().isoformat()}'",
+                f"SELECT u.name as 'חייל', e.type as 'סוג', e.details as 'סיבה/פירוט', e.end_date as 'סיום' FROM exemptions e JOIN users u ON e.user_id = u.id WHERE e.status = 'מאושר' AND e.end_date >= '{date.today().isoformat()}'",
                 conn)
             st.table(active_ex)
 
@@ -303,8 +293,9 @@ else:
             e_d = st.text_area("פירוט וסיבה")
             e_v = st.date_input("תאריך סיום פטור")
             if st.form_submit_button("שלח למפקד"):
-                conn.execute("INSERT INTO exemptions VALUES (?, ?, ?, ?, 'ממתין')",
-                             (st.session_state['user_id'], e_t, e_d, e_v))
+                conn.execute(
+                    "INSERT INTO exemptions (user_id, type, details, end_date, status) VALUES (?, ?, ?, ?, 'ממתין')",
+                    (st.session_state['user_id'], e_t, e_d, e_v))
                 conn.commit()
                 st.success("✅ הבקשה נשלחה לאישור המפקד.")
 
